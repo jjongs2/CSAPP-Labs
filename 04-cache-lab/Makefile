@@ -6,11 +6,11 @@ CC = gcc
 CFLAGS = -g -Wall -Werror -std=c99 -m64
 
 all: csim test-trans tracegen
-	# Generate a handin tar file each time you compile
-	-tar -cvf ${USER}-handin.tar  csim.c trans.c 
+#	# Generate a handin tar file each time you compile
+#	-tar -cvf ${USER}-handin.tar  csim.c trans.c 
 
-csim: csim.c cachelab.c cachelab.h
-	$(CC) $(CFLAGS) -o csim csim.c cachelab.c -lm 
+csim: csim.c cachelab.c utils.c csim.h cachelab.h utils.h
+	$(CC) $(CFLAGS) -o csim csim.c cachelab.c utils.c -lm 
 
 test-trans: test-trans.c trans.o cachelab.c cachelab.h
 	$(CC) $(CFLAGS) -o test-trans test-trans.c cachelab.c trans.o 
@@ -29,5 +29,5 @@ clean:
 	rm -f *.tar
 	rm -f csim
 	rm -f test-trans tracegen
-	rm -f trace.all trace.f*
+	rm -f trace.all trace.f* trace.tmp
 	rm -f .csim_results .marker
