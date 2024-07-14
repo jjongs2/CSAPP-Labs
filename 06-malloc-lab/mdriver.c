@@ -15,6 +15,7 @@
 #include <assert.h>
 #include <float.h>
 #include <time.h>
+#include <dirent.h>
 
 #include "mm.h"
 #include "memlib.h"
@@ -95,11 +96,12 @@ char msg[MAXLINE];      /* for whenever we need to compose an error message */
 /* Directory where default tracefiles are found */
 static char tracedir[MAXLINE] = TRACEDIR;
 
+#ifdef DEFAULT_TRACEFILES
 /* The filenames of the default tracefiles */
 static char *default_tracefiles[] = {  
     DEFAULT_TRACEFILES, NULL
 };
-
+#endif
 
 /********************* 
  * Function prototypes 
@@ -114,6 +116,9 @@ static void clear_ranges(range_t **ranges);
 /* These functions read, allocate, and free storage for traces */
 static trace_t *read_trace(char *tracedir, char *filename);
 static void free_trace(trace_t *trace);
+#ifndef DEFAULT_TRACEFILES
+static char **list_tracefiles(char *tracedir, int *num_tracefiles);
+#endif
 
 /* Routines for evaluating the correctness and speed of libc malloc */
 static int eval_libc_valid(trace_t *trace, int tracenum);
@@ -126,7 +131,8 @@ static double eval_mm_util(trace_t *trace, int tracenum, range_t **ranges);
 static void eval_mm_speed(void *ptr);
 
 /* Various helper routines */
-static void printresults(int n, stats_t *stats);
+const char *get_filename(const char *path);
+static void printresults(char **tracefiles, int n, stats_t *stats);
 static void usage(void);
 static void unix_error(char *msg);
 static void malloc_error(int tracenum, int opnum, char *msg);
@@ -227,12 +233,21 @@ int main(int argc, char **argv)
 
     /* 
      * If no -f command line arg, then use the entire set of tracefiles 
-     * defined in default_traces[]
+     * in the specified directory
      */
     if (tracefiles == NULL) {
+#ifdef DEFAULT_TRACEFILES
         tracefiles = default_tracefiles;
         num_tracefiles = sizeof(default_tracefiles) / sizeof(char *) - 1;
 	printf("Using default tracefiles in %s\n", tracedir);
+#else
+        tracefiles = list_tracefiles(tracedir, &num_tracefiles);
+        if (num_tracefiles == 0) {
+            printf("No tracefiles found in %s\n", tracedir);
+            exit(1);
+        }
+        printf("Using all tracefiles in %s\n", tracedir);
+#endif
     }
 
     /* Initialize the timing package */
@@ -269,7 +284,7 @@ int main(int argc, char **argv)
 	/* Display the libc results in a compact table */
 	if (verbose) {
 	    printf("\nResults for libc malloc:\n");
-	    printresults(num_tracefiles, libc_stats);
+	    printresults(tracefiles, num_tracefiles, libc_stats);
 	}
     }
 
@@ -310,7 +325,7 @@ int main(int argc, char **argv)
     /* Display the mm results in a compact table */
     if (verbose) {
 	printf("\nResults for mm malloc:\n");
-	printresults(num_tracefiles, mm_stats);
+	printresults(tracefiles, num_tracefiles, mm_stats);
 	printf("\n");
     }
 
@@ -565,6 +580,47 @@ void free_trace(trace_t *trace)
     free(trace->block_sizes);
     free(trace);              /* and the trace record itself... */
 }
+
+#ifndef DEFAULT_TRACEFILES
+/*
+ * list_tracefiles - List all trace files in the given directory
+ */
+static char **list_tracefiles(char *tracedir, int *num_tracefiles) {
+    int max_num_tracefiles = 20;
+    DIR *dirp;
+    struct dirent *entry;
+    char **tracefiles;
+
+    dirp = opendir(tracedir);
+    if (dirp == NULL)
+        unix_error("opendir failed in list_trace_files");
+    tracefiles = malloc(max_num_tracefiles * sizeof(char *));
+    if (tracefiles == NULL)
+        unix_error("malloc failed in list_trace_files");
+    while ((entry = readdir(dirp)) != NULL) {
+        if (strstr(entry->d_name, ".rep") == NULL)
+            continue;
+        if (*num_tracefiles >= max_num_tracefiles) {
+            max_num_tracefiles *= 2;
+            tracefiles =
+                realloc(tracefiles, max_num_tracefiles * sizeof(char *));
+            if (tracefiles == NULL)
+                unix_error("realloc failed in list_trace_files");
+        }
+        tracefiles[*num_tracefiles] = strdup(entry->d_name);
+        *num_tracefiles += 1;
+    }
+    closedir(dirp);
+    if (*num_tracefiles + 1 != max_num_tracefiles) {
+        tracefiles =
+            realloc(tracefiles, (*num_tracefiles + 1) * sizeof(char *));
+        if (tracefiles == NULL)
+            unix_error("realloc failed in list_trace_files");
+    }
+    tracefiles[*num_tracefiles] = NULL;
+    return tracefiles;
+}
+#endif
 
 /**********************************************************************
  * The following functions evaluate the correctness, space utilization,
@@ -914,11 +970,20 @@ static void eval_libc_speed(void *ptr)
  * Some miscellaneous helper routines
  ************************************/
 
+/*
+ * get_filename - Extract a filename from the path
+ */
+const char *get_filename(const char *path) {
+    const char *last_slash = strrchr(path, '/');
+    if (last_slash == NULL)
+        return path;
+    return last_slash + 1;
+}
 
 /*
  * printresults - prints a performance summary for some malloc package
  */
-static void printresults(int n, stats_t *stats) 
+static void printresults(char **tracefiles, int n, stats_t *stats) 
 {
     int i;
     double secs = 0;
@@ -926,12 +991,12 @@ static void printresults(int n, stats_t *stats)
     double util = 0;
 
     /* Print the individual results for each trace */
-    printf("%5s%7s %5s%8s%10s%6s\n", 
+    printf("%20s%7s %5s%8s%10s%8s\n", 
 	   "trace", " valid", "util", "ops", "secs", "Kops");
     for (i=0; i < n; i++) {
 	if (stats[i].valid) {
-	    printf("%2d%10s%5.0f%%%8.0f%10.6f%6.0f\n", 
-		   i,
+	    printf("%20s%7s%5.0f%%%8.0f%10.6f%8.0f\n", 
+		   get_filename(tracefiles[i]),
 		   "yes",
 		   stats[i].util*100.0,
 		   stats[i].ops,
@@ -942,8 +1007,8 @@ static void printresults(int n, stats_t *stats)
 	    util += stats[i].util;
 	}
 	else {
-	    printf("%2d%10s%6s%8s%10s%6s\n", 
-		   i,
+	    printf("%20s%7s%6s%8s%10s%8s\n", 
+		   tracefiles[i],
 		   "no",
 		   "-",
 		   "-",
@@ -954,7 +1019,7 @@ static void printresults(int n, stats_t *stats)
 
     /* Print the aggregate results for the set of traces */
     if (errors == 0) {
-	printf("%12s%5.0f%%%8.0f%10.6f%6.0f\n", 
+	printf("%27s%5.0f%%%8.0f%10.6f%8.0f\n", 
 	       "Total       ",
 	       (util/n)*100.0,
 	       ops, 
@@ -962,7 +1027,7 @@ static void printresults(int n, stats_t *stats)
 	       (ops/1e3)/secs);
     }
     else {
-	printf("%12s%6s%8s%10s%6s\n", 
+	printf("%27s%6s%8s%10s%8s\n", 
 	       "Total       ",
 	       "-", 
 	       "-", 
